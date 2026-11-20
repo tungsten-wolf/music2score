@@ -1,0 +1,4 @@
+# 악기 분리(--separate)용 추가 패키지. PyTorch가 함께 설치됩니다 (수백 MB).
+# demucs 4.1 이상이 필요합니다 (demucs.api 사용).
+-r requirements.txt
+demucs>=4.1
