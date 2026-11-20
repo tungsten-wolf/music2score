@@ -4,6 +4,7 @@
 
 ## 어떻게 동작하나요?
 
+0. **(선택) 악기 분리**: Meta의 [Demucs](https://github.com/facebookresearch/demucs)가 곡을 보컬 / 드럼 / 베이스 / 기타 / 피아노 / 그 외(신스 등)로 나눕니다.
 1. **음 인식**: Spotify의 오픈소스 AI 모델 [basic-pitch](https://github.com/spotify/basic-pitch)가 오디오에서 음(시작·끝·높이·세기)을 찾아냅니다.
 2. **잡음 정리**: 약하고 짧은 음, 큰 음에 딸려 나온 배음(옥타브 위 유령 음)을 걸러냅니다.
 3. **박자 맞추기**: 템포를 자동 추정하고, 음을 16분음표(또는 8분/셋잇단) 격자에 맞춰 정렬합니다.
@@ -18,6 +19,9 @@
 | `곡이름.musicxml` | MuseScore, Finale, Sibelius, Dorico 등에서 열어 **편집**할 수 있는 악보 |
 | `곡이름.mid` | 원곡 연주의 미묘한 타이밍이 살아있는 MIDI (재생·DAW용으로 추천) |
 | `곡이름_score.mid` | 악보와 똑같이 박자에 맞춘 MIDI |
+| `곡이름_stems/*.wav` | (악기 분리 시) 악기별로 분리된 소리 |
+
+악기 분리를 켜면 MIDI도 악기별 트랙(보컬, 신스, 기타, 피아노, 베이스)으로 나뉘어 저장됩니다.
 
 ## 설치 (한 번만)
 
@@ -29,6 +33,8 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+* 악기 분리까지 쓰려면 추가로 `pip install -r requirements-separate.txt` (PyTorch 포함, 수백 MB).
+  처음 분리할 때 Demucs 모델(약 50~80MB)을 자동으로 내려받습니다. NVIDIA GPU나 Apple Silicon이 있으면 자동으로 사용합니다.
 * PDF 생성에 쓰는 `cairosvg`는 Cairo 라이브러리가 필요합니다. macOS는 `brew install cairo`, Ubuntu는 `sudo apt install libcairo2`.
   (Cairo가 없으면 `--no-pdf`로 MusicXML만 만든 뒤 MuseScore에서 PDF로 내보내면 됩니다.)
 
@@ -49,6 +55,12 @@ python music2score.py 노래.mp3                       # output/ 폴더에 결�
 python music2score.py 노래.mp3 --mode melody          # 멜로디만 한 줄 악보로
 python music2score.py 노래.mp3 --tempo 96 --grid 2    # 템포 지정, 8분음표 단위로 정렬
 python music2score.py 노래.mp3 -o 결과 --title "내 곡"
+
+# 악기 분리
+python music2score.py 노래.mp3 --separate                          # 악기별 파트 악보 + 코드 이름
+python music2score.py 노래.mp3 --separate --stems vocals,bass       # 보컬과 베이스만
+python music2score.py 노래.mp3 --separate --synth-mode chords       # 신스 파트는 코드 블록으로 단순화
+python music2score.py 노래.mp3 --synth --chords                     # 분리 없이 전자음악용 정리 + 코드 이름
 ```
 
 주요 옵션
@@ -63,11 +75,47 @@ python music2score.py 노래.mp3 -o 결과 --title "내 곡"
 | `--min-freq / --max-freq` | 이 주파수 범위 밖의 음 무시 (예: 베이스만 → `--max-freq 300`) |
 | `--split 60` | 양손을 나누는 음 (60 = 가운데 도) |
 | `--no-pdf` | PDF 생성 생략 |
+| `--separate` | Demucs로 악기 분리 후 악기별 파트 악보 생성 |
+| `--demucs-model` | `htdemucs_6s`(기본, 기타·피아노까지 분리) / `htdemucs` / `htdemucs_ft`(더 정확, 약 4배 느림) |
+| `--stems` | 악보에 넣을 악기: `vocals,other,guitar,piano,bass` 중 선택 (드럼은 음높이가 없어 제외) |
+| `--synth-mode full/lead/chords` | 신스(other) 파트 표기 방식 (아래 설명) |
+| `--synth` | 분리 없이 쓸 때 신스 잡음 정리 적용 |
+| `--chords` / `--no-chords` | 악보 위 코드 이름 표기 (분리 시 기본 켜짐) |
+
+## 악기별 처리
+
+| 악기 | 악보 | 처리 |
+|---|---|---|
+| 보컬 | 한 줄 (음역에 따라 높은/낮은음자리표) | 65~1500Hz만 인식, 가장 높은 선율만 남김 |
+| 신스·그 외 | 큰보표 (또는 `--synth-mode`) | 신스 전용 정리 (아래) |
+| 기타 | 높은음자리표 8vb (기타 표준 표기) | |
+| 피아노 | 큰보표 | |
+| 베이스 | 낮은음자리표 8vb (베이스 기타 표준 표기) | 30~400Hz만 인식, 가장 낮은 음만 남기고 튀는 고음 제거 |
+| 드럼 | (악보에서 제외) | 분리된 소리는 `stems` 폴더에 저장 |
+
+## 신스는 어떻게 처리하나요?
+
+신스 소리는 피아노와 달리 음 인식 모델을 헷갈리게 하는 특징이 있어서, 신스 파트에는 따로 정리 단계를 거칩니다 (`synth.py`).
+
+| 문제 | 원인 | 처리 |
+|---|---|---|
+| 긴 음이 여러 조각으로 끊김 | 패드의 LFO, 사이드체인 펌핑, 트레몰로 | 같은 음이 50ms 이하 틈으로 이어지면 하나로 합침 |
+| 옥타브·5도 위 유령 음 | 톱니파·사각파의 강한 배음 | 더 센 음의 배음 위치에서 동시에 울리는 약한 음 제거 |
+| 반음 옆 유령 음 | 디튠/슈퍼소우, 피치 흔들림 | 더 센 음과 겹치는 반음 위아래 약한 음 제거 |
+| 같은 음이 작아지며 반복 | 딜레이/에코 효과 | 직전 같은 음보다 훨씬 약하게 곧바로 반복되면 제거 |
+
+그래도 신스 파트는 화음이 빽빽하게 나오기 쉬워서, 표기 방식을 고를 수 있습니다.
+
+* `full` (기본): 정리된 음을 큰보표에 모두 적습니다. 가장 원곡에 가깝지만 복잡합니다.
+* `lead`: 맨 윗선율만 한 줄로 적습니다. 신스 리드 멜로디가 중요한 곡에 맞습니다.
+* `chords`: 반 마디마다 코드를 인식해서 읽기 쉬운 블록 화음으로 단순화합니다. 패드·코드 반주 위주의 곡에 맞습니다.
+
+코드 이름 인식(`chords.py`)은 각 반 마디 구간의 음 분포를 장/단3화음, 7화음, sus4, dim 틀과 비교해 가장 잘 맞는 코드를 고릅니다. 텐션이 많거나 화성이 모호한 곡에서는 틀릴 수 있으니 참고용으로 봐 주세요.
 
 ## 정확도에 대해 (꼭 읽어 주세요)
 
 * **잘 되는 것**: 피아노 독주, 기타 독주, 노래·플루트·바이올린 같은 단선율 악기. 음높이는 꽤 정확합니다.
 * **어려운 것**: 밴드·오케스트라처럼 악기가 많이 섞인 곡. 모든 악기의 음이 한 악보에 섞여 나오고, 드럼·리버브 때문에 잡음 음표가 늘어납니다.
-  → 이런 곡은 먼저 보컬/악기 분리 도구(예: Demucs, Ultimate Vocal Remover)로 원하는 파트만 뽑은 뒤 넣으면 훨씬 좋아집니다.
+  → `--separate`로 악기를 분리하면 훨씬 좋아집니다. 다만 분리가 완벽하지는 않아서, 특히 신스와 피아노처럼 음색이 비슷한 악기는 서로 섞여 들어갈 수 있습니다 (htdemucs_6s의 피아노 분리는 아직 실험적인 수준입니다).
 * **리듬·박자표**: 템포가 일정한 곡일수록 정확합니다. 템포가 자주 변하거나(루바토) 박자표가 4/4가 아니면 직접 옵션을 주는 게 좋습니다. 마디의 첫 박 위치는 추정이라 한두 박 어긋날 수 있습니다.
 * 결과는 **초안**으로 생각해 주세요. MusicXML을 MuseScore(무료)에서 열어 다듬는 것을 권장합니다.
